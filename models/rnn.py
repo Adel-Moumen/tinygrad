@@ -32,12 +32,18 @@ class RNNBlock:
         return h 
 
     def _rnn_cell(self, x, ht):
+        """"""
+        # save hiddens states 
+        hiddens = []
 
         wx = x.linear(*self.W)
         for t in range(x.shape[0]):
             ht = wx + ht.linear(*self.U)
+
+            hiddens.append(ht)
+
+        return hiddens 
         
-        return ht 
 
 if __name__ == "__main__":
     rnn = RNNBlock(1, 1, 2)
