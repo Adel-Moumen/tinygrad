@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-import os, time, io, pathlib, sys
+import os, time, io, pathlib, sys, traceback
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
-os.environ['OPT'] = '99'
+if os.getenv("OPT", None) is None:
+  os.environ['OPT'] = '99'
 if os.getenv("GPU", None) is None:
-  os.environ['OPENCL'] = '1'
+  os.environ['GPU'] = '1'
 
-ALLOWED_KERNEL_COUNT = int(os.getenv("ALLOWED_KERNEL_COUNT", 0))
-DEBUGCL = int(os.getenv("DEBUGCL", 0))
+from tinygrad.helpers import getenv
+ALLOWED_KERNEL_COUNT = getenv("ALLOWED_KERNEL_COUNT", 0)
+DEBUGCL = getenv("DEBUGCL", 0)
 
 import onnx
 import numpy as np
 
 import tinygrad.graph as graph
+from tinygrad.ops import GlobalCounters
 
-from tinygrad.llops.ops_gpu import CL
+from tinygrad.runtime.opencl import CL
 from extra.utils import fetch
 from extra.onnx import get_run_onnx
 from tinygrad.tensor import Tensor
@@ -32,7 +35,7 @@ def get_random_input_tensors(input_shapes):
     "features_buffer": np.random.randn(*input_shapes['features_buffer'])
     #"initial_state": np.zeros((1, 768))
   }
-  if int(os.getenv("ZERO_OUT", "0")):
+  if getenv("ZERO_OUT", 0):
     np_inputs = {k:v*0 for k,v in np_inputs.items()}
 
   for k,v in np_inputs.items():
@@ -53,6 +56,15 @@ def get_random_input_tensors(input_shapes):
   for _,v in inputs.items(): v.realize()
   return inputs, np_inputs
 
+from extra.jit import TinyJit
+
+@TinyJit
+def model_exec(run_onnx, using_graph, **inputs):
+  ret = next(iter(run_onnx(inputs).values()))
+  GlobalCounters.cache = []  # don't cache pre-realize
+  if using_graph: graph.GRAPH = True
+  return ret.realize()
+
 def compile(dat, output_fn):
   Tensor.no_grad = True
   using_graph = graph.GRAPH
@@ -65,49 +77,34 @@ def compile(dat, output_fn):
   for inp in onnx_model.graph.input:
     input_shapes[inp.name] = tuple(x.dim_value for x in inp.type.tensor_type.shape.dim)
 
-  inputs, _ = get_random_input_tensors(input_shapes)
-
-  # initial run(s) to load weights
-  for _ in range(2):
-    st = time.monotonic()
-    tinygrad_out = run_onnx(inputs)['outputs']
-    mt = time.monotonic()
-    tinygrad_out.realize()
-    mt2 = time.monotonic()
-    tinygrad_out = tinygrad_out.numpy()
-    et = time.monotonic()
-    print(f"ran openpilot model in {(et-st)*1000.0:.2f} ms, waited {(mt2-mt)*1000.0:.2f} ms for realize, {(et-mt2)*1000.0:.2f} ms for GPU queue")
-
-    # realize all non GCed tensors (fix for batchnorm folding)
-    import gc
-    gc.collect()
-    for x in [x for x in gc.get_objects() if isinstance(x, Tensor)]:
-      x.realize()
-
-  # real run
   inputs, np_inputs = get_random_input_tensors(input_shapes)
-  print("***** REAL RUN *****")
-  tinygrad_out = run_onnx(inputs)['outputs']
-
-  # note, since CL.CACHE is enabled, it doesn't actually run the kernels
-  CL.CACHE = []
-  if using_graph: graph.GRAPH = True
-  CL.kernel_count = -1
-  tinygrad_out.realize()
+  # run twice to trigger the JIT
+  for i in range(2): tinygrad_out = model_exec(run_onnx, i == 1 and using_graph, **inputs)
   graph.GRAPH = False
-  print("kernel count:", len(CL.CACHE))
-  assert len(CL.CACHE) <= ALLOWED_KERNEL_COUNT or ALLOWED_KERNEL_COUNT == 0, "too many kernels!"
+  print("kernel count:", len(model_exec.jit_cache))
+  assert len(model_exec.jit_cache) <= ALLOWED_KERNEL_COUNT or ALLOWED_KERNEL_COUNT == 0, "too many kernels!"
+
+  # transform to CL.CACHE
+  used_ops = 0
+  cl_cache = []
+  for prg,args in model_exec.jit_cache:
+    real_clprg = prg.clprg
+    used_ops += real_clprg.op_estimate
+    prg.clprg = lambda *args: cl_cache.append((real_clprg, args))
+    prg(*args)
 
   from extra.thneed import Thneed
-  t = Thneed(CL.CACHE, {k:inputs[k].lazydata.realized.cl for k in inputs.keys()})
-  CL.CACHE = None
-  t.optimize_local_workgroup()
+  t = Thneed(cl_cache, {k:inputs[k].lazydata.realized.cl for k in inputs.keys()})
+
+  if getenv("OPTWG", 0):
+    t.optimize_local_workgroup()
 
   # save thneed (before run)
   t.save(output_fn)
 
-  print(f"buffers to save: {len(t.buffers_to_save)}, outputs: {t.outputs}")
-  t.run()
+  print(f"buffers to save: {len(t.buffers_to_save)}, inputs: {list(t.inputs.keys())}, outputs: {t.outputs}")
+  runtime = t.run()
+  print(f"network using {used_ops/1e9:.2f} GOPS with runtime {runtime*1e3:.2f} ms that's {used_ops/runtime*1e-9:.2f} GFLOPS")
 
   # confirm thneed found the right output
   thneed_out = np.empty((t.outputs[0].size//4,), dtype=np.float32).reshape(tinygrad_out.shape)
@@ -115,7 +112,7 @@ def compile(dat, output_fn):
   np.testing.assert_allclose(thneed_out, tinygrad_out.numpy())
 
   # float32 only (fix this)
-  FLOAT16 = int(os.getenv("FLOAT16", 0))
+  FLOAT16 = getenv("FLOAT16", 0)
   if FLOAT16 == 0:
     try:
       from test.test_onnx import run_onnx_torch
@@ -157,7 +154,6 @@ def compile(dat, output_fn):
       print("thneed self-test passed!")
     except ModuleNotFoundError:
       pass
-  
 
 
 # UNSAFE_FLOAT4=1 DEBUGCL=1 FLOAT16=1 python3 openpilot/compile.py

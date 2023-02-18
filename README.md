@@ -6,6 +6,8 @@
 
 ![Unit Tests](https://github.com/geohot/tinygrad/workflows/Unit%20Tests/badge.svg)
 
+[![tinygrad discord](https://discordapp.com/api/guilds/1068976834382925865/widget.png?style=banner2)](https://discord.gg/ZjZadyC7PK)
+
 For something in between a [pytorch](https://github.com/pytorch/pytorch) and a [karpathy/micrograd](https://github.com/karpathy/micrograd)
 
 This may not be the best deep learning framework, but it is a deep learning framework.
@@ -16,13 +18,25 @@ Due to its extreme simplicity, it aims to be the easiest framework to add new ac
 
 We are working on support for the Apple Neural Engine and the Google TPU in the `accel/` folder. Eventually, [we will build custom hardware](https://geohot.github.io/blog/jekyll/update/2021/06/13/a-breakdown-of-ai-chip-companies.html) for tinygrad, and it will be blindingly fast. Now, it is slow.
 
+This project is maintained by [tiny corp](https://tinygrad.org/).
+
 ### Installation
 
 ```bash
 git clone https://github.com/geohot/tinygrad.git
 cd tinygrad
-python3 setup.py develop
+python3 -m pip install -e .
 ```
+
+### Contributing
+
+There's a lot of interest in tinygrad lately. Here's some guidelines for contributing:
+
+* Bugfixes are the best and always welcome! Like [this one](https://github.com/geohot/tinygrad/pull/421/files).
+* If you don't understand the code you are changing, don't change it!
+* All code golf PRs will be closed, but [conceptual cleanups](https://github.com/geohot/tinygrad/pull/372/files) are great.
+* Features are welcome. Though if you are adding a feature, you need to include tests.
+* Improving test coverage is great, with reliable non brittle tests.
 
 ### Example
 
@@ -34,8 +48,8 @@ y = Tensor([[2.0,0,-2.0]], requires_grad=True)
 z = y.matmul(x).sum()
 z.backward()
 
-print(x.grad)  # dz/dx
-print(y.grad)  # dz/dy
+print(x.grad.numpy())  # dz/dx
+print(y.grad.numpy())  # dz/dy
 ```
 
 ### Same example in torch
@@ -133,7 +147,7 @@ The autodiff stuff is all in mlops now so you can focus on the raw operations
 
 ```
 Buffer                                                     # class of memory on this device
-unary_op  (RELU, EXP, LOG, NEG, SIGN)                      # A -> A
+unary_op  (RELU, EXP, LOG, NEG, GT0)                       # A -> A
 reduce_op (SUM, MAX)                                       # A -> B (smaller size, B has 1 in shape)
 binary_op (ADD, SUB, MUL, DIV, POW, CMPEQ)                 # A + B -> C (all the same size)
 movement_op (RESHAPE, PERMUTE, PAD, SHRINK, EXPAND, FLIP)  # A -> B (different size)
@@ -162,9 +176,9 @@ PROPROTIP: Set "DEBUG=1" environment variable if you want to see why it's slow.
 
 ### tinygrad supports Stable Diffusion!
 
-Run `TORCH=1 python3 examples/stable_diffusion.py`
+You might need to download the [weight](https://huggingface.co/CompVis/stable-diffusion-v-1-4-original/resolve/main/sd-v1-4.ckpt) of Stable Diffusion and put it into weights/
 
-(or without torch: `OPT=2 OPENCL=1 python3 examples/stable_diffusion.py`)
+Run `GPU=1 python3 examples/stable_diffusion.py`
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/geohot/tinygrad/master/docs/stable_diffusion_by_tinygrad.jpg">

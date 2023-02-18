@@ -1,24 +1,23 @@
-import os
 import unittest
 import time
-import tinygrad.nn.optim as optim
 import numpy as np
+from tinygrad.nn import optim
 from tinygrad.tensor import Device
+from tinygrad.helpers import getenv
 from extra.training import train
-from extra.utils import get_parameters
 from models.efficientnet import EfficientNet
 from models.transformer import Transformer
 from models.vit import ViT
 from models.resnet import ResNet18
 
-BS = int(os.getenv("BS", "2"))
+BS = getenv("BS", 2)
 
 def train_one_step(model,X,Y):
-  params = get_parameters(model)
+  params = optim.get_parameters(model)
   pcount = 0
   for p in params:
     pcount += np.prod(p.shape)
-  optimizer = optim.Adam(params, lr=0.001)
+  optimizer = optim.SGD(params, lr=0.001)
   print("stepping %r with %.1fM params bs %d" % (type(model), pcount/1e6, BS))
   st = time.time()
   train(model, X, Y, optimizer, steps=1, BS=BS)
@@ -45,6 +44,10 @@ class TestTrain(unittest.TestCase):
     X = np.zeros((BS,6), dtype=np.float32)
     Y = np.zeros((BS,6), dtype=np.int32)
     train_one_step(model,X,Y)
+
+    if Device.DEFAULT == "GPU":
+      from extra.introspection import print_objects
+      assert print_objects() == 0
 
   def test_resnet(self):
     X = np.zeros((BS, 3, 224, 224), dtype=np.float32)

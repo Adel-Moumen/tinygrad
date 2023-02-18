@@ -10,24 +10,18 @@ import unittest
 from tinygrad.tensor import Tensor, Device
 from tinygrad import nn
 from tinygrad.nn import optim
-
-try:
-  from tinygrad.llops.ops_gpu import CL
-except ImportError:
-  pass
+from tinygrad.ops import GlobalCounters
 
 class CLCache():
   def __enter__(self):
     gc.collect()
     for x in [x for x in gc.get_objects() if isinstance(x, Tensor)]:
       x.realize()
-    CL.CACHE = []
+    GlobalCounters.cache = []
     print("cache: entering")
   def __exit__(self, type, value, traceback):
-    print(f"cache: exiting with size {len(CL.CACHE)}")
-    for prg, args in CL.CACHE:
-      e = prg.clprg(CL().cl_queue, *args)
-    CL.CACHE = None
+    print(f"cache: exiting with size {len(GlobalCounters.cache)}")
+    GlobalCounters.cache = None
 
 @unittest.skipUnless(Device.DEFAULT == "GPU", "Not Implemented")
 class TestOpt(unittest.TestCase):
@@ -36,7 +30,7 @@ class TestOpt(unittest.TestCase):
     with CLCache():
       d = a * b + c
       d.realize()
-      assert len(CL.CACHE) == 1, "optimizer didn't fold muladd"
+      assert len(GlobalCounters.cache) == 1, "optimizer didn't fold muladd"
     np.testing.assert_allclose(d.numpy(), np.ones((2,2))*2, rtol=1e-5)
 
   def test_fold_reduce_elementwise(self):
@@ -45,18 +39,18 @@ class TestOpt(unittest.TestCase):
     with CLCache():
       ret = img.sum() + addme
       ret.realize()
-      assert len(CL.CACHE) == 1, "optimizer didn't fold reduce/elementwise"
+      assert len(GlobalCounters.cache) == 1, "optimizer didn't fold reduce/elementwise"
     assert ret.numpy()[0] == 33
 
   def test_fold_batchnorm(self):
     # TODO: with Tensor.training
     Tensor.training = True
     img = Tensor.ones(1,32,4,4)
-    bn = nn.BatchNorm2D(32, track_running_stats=False)
+    bn = nn.BatchNorm2d(32, track_running_stats=False)
     with CLCache():
       img_bn = bn(img).realize()
       print(img_bn)
-      assert len(CL.CACHE) == 3, "optimizer didn't fold batchnorm"
+      assert len(GlobalCounters.cache)  == 3, "optimizer didn't fold batchnorm"
     Tensor.training = False
 
   def test_fold_conv_sgd(self):
@@ -71,7 +65,7 @@ class TestOpt(unittest.TestCase):
       opt.step()
       # TODO: this should be 4, but the sum output child stays around
       # with pushing_permutes it can be 3
-      assert len(CL.CACHE) == 5, "optimizer didn't fold conv-backward SGD"
+      assert len(GlobalCounters.cache) == 5, "optimizer didn't fold conv-backward SGD"
     Tensor.training = False
 
   def test_fold_conv_batchnorm_sgd(self):
@@ -79,35 +73,35 @@ class TestOpt(unittest.TestCase):
     Tensor.training = True
     img = Tensor.ones(1,3,4,4)
     c1 = nn.Conv2d(3,32,3)
-    bn = nn.BatchNorm2D(32, track_running_stats=False)
+    bn = nn.BatchNorm2d(32, track_running_stats=False)
     opt = optim.SGD(optim.get_parameters([c1, bn]))
     with CLCache():
       img_bn = bn(c1(img)).elu().sum()
       opt.zero_grad()
       img_bn.backward()
       opt.step()
-      assert len(CL.CACHE) == 10, "optimizer didn't fold conv-backward batchnorm"
+      assert len(GlobalCounters.cache) == 10, "optimizer didn't fold conv-backward batchnorm"
     Tensor.training = False
 
   def test_fold_conv_batchnorm_notrain(self):
     img = Tensor.ones(1,3,8,8)
     c1 = nn.Conv2d(3,32,3)
-    bn = nn.BatchNorm2D(32, track_running_stats=False)
+    bn = nn.BatchNorm2d(32, track_running_stats=False)
     # precache the bn
     img_conv = bn(c1(img)).relu().realize()
     with CLCache():
       img_conv = bn(c1(img)).relu().realize()
-      assert len(CL.CACHE) == 1, "optimizer didn't fold conv-batchnorm at test time"
+      assert len(GlobalCounters.cache) == 1, "optimizer didn't fold conv-batchnorm at test time"
 
   def test_fold_conv_batchnorm(self):
     Tensor.training = True
     img = Tensor.ones(1,3,8,8)
     c1 = nn.Conv2d(3,32,3)
-    bn = nn.BatchNorm2D(32, track_running_stats=False)
+    bn = nn.BatchNorm2d(32, track_running_stats=False)
     with CLCache():
       img_conv = bn(c1(img)).relu().realize()
       print(img_conv)
-      assert len(CL.CACHE) == 4, "optimizer didn't fold conv-batchnorm"
+      assert len(GlobalCounters.cache) == 4, "optimizer didn't fold conv-batchnorm"
     Tensor.training = False
 
   def test_fold_conv_elu(self):
@@ -117,7 +111,7 @@ class TestOpt(unittest.TestCase):
     with CLCache():
       img_conv = img.sequential([c1, Tensor.elu, c2, Tensor.elu]).realize()
       print(img_conv)
-      assert len(CL.CACHE) == 2, "optimizer didn't fold conv/elu"
+      assert len(GlobalCounters.cache) == 2, "optimizer didn't fold conv/elu"
 
   def test_fold_conv_relu(self):
     img = Tensor.ones(1,4,8,8)
@@ -126,7 +120,7 @@ class TestOpt(unittest.TestCase):
     with CLCache():
       img_conv = img.sequential([c1, Tensor.relu, c2, Tensor.relu]).realize()
       print(img_conv)
-      assert len(CL.CACHE) == 2, "optimizer didn't fold conv/relu"
+      assert len(GlobalCounters.cache) == 2, "optimizer didn't fold conv/relu"
 
   def test_fold_conv_relu_nobias(self):
     img = Tensor.ones(1,4,8,8)
@@ -135,7 +129,7 @@ class TestOpt(unittest.TestCase):
     with CLCache():
       img_conv = img.sequential([c1, Tensor.relu, c2, Tensor.relu]).realize()
       print(img_conv)
-      assert len(CL.CACHE) == 2, "optimizer didn't fold conv/relu"
+      assert len(GlobalCounters.cache) == 2, "optimizer didn't fold conv/relu"
 
 if __name__ == '__main__':
   unittest.main()

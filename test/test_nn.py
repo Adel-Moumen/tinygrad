@@ -2,8 +2,7 @@
 import unittest
 import numpy as np
 from tinygrad.tensor import Tensor, Device
-from tinygrad.nn import *
-from extra.utils import get_parameters
+from tinygrad.nn import BatchNorm2d, Conv2d, Linear, GroupNorm, LayerNorm
 import torch
 
 @unittest.skipUnless(Device.DEFAULT == Device.CPU, "Not Implemented")
@@ -14,7 +13,7 @@ class TestNN(unittest.TestCase):
 
     # create in tinygrad
     Tensor.training = training
-    bn = BatchNorm2D(sz, eps=1e-5, track_running_stats=training)
+    bn = BatchNorm2d(sz, eps=1e-5, track_running_stats=training)
     bn.weight = Tensor.randn(sz)
     bn.bias = Tensor.randn(sz)
     bn.running_mean = Tensor.randn(sz)
@@ -94,6 +93,44 @@ class TestNN(unittest.TestCase):
     torch_x = torch.tensor(x.cpu().data)
     torch_z = torch_layer(torch_x)
     np.testing.assert_allclose(z.data, torch_z.detach().numpy(), atol=5e-4, rtol=1e-5)
+
+  def test_groupnorm(self):
+    BS, H, W, C, G = 20, 10, 10, 6, 3
+
+    # create in tinygrad
+    layer = GroupNorm(G, C)
+
+    # create in torch
+    with torch.no_grad():
+      torch_layer = torch.nn.GroupNorm(G, C).eval()
+      torch_layer.weight[:] = torch.tensor(layer.weight.data, dtype=torch.float32)
+      torch_layer.bias[:] = torch.tensor(layer.bias.data, dtype=torch.float32)
+
+    # test
+    x = Tensor.randn(BS, C, H, W)
+    z = layer(x)
+    torch_x = torch.tensor(x.cpu().data)
+    torch_z = torch_layer(torch_x)
+    np.testing.assert_allclose(z.data, torch_z.detach().numpy(), atol=5e-3, rtol=5e-3)
+
+  def test_layernorm(self):
+    N, C, H, W = 20, 5, 10, 10
+
+    # create in tinygrad
+    layer = LayerNorm([H, W])
+
+    # create in torch
+    with torch.no_grad():
+      torch_layer = torch.nn.LayerNorm([H, W]).eval()
+      torch_layer.weight[:] = torch.tensor(layer.weight.data, dtype=torch.float32)
+      torch_layer.bias[:] = torch.tensor(layer.bias.data, dtype=torch.float32)
+
+    # test
+    x = Tensor.randn(N, C, H, W)
+    z = layer(x)
+    torch_x = torch.tensor(x.cpu().data)
+    torch_z = torch_layer(torch_x)
+    np.testing.assert_allclose(z.data, torch_z.detach().numpy(), atol=5e-3, rtol=5e-3)
 
 if __name__ == '__main__':
   unittest.main()

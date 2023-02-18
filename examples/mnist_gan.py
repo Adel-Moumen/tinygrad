@@ -3,19 +3,16 @@ import os
 import sys
 import numpy as np
 from tqdm import tqdm
-sys.path.append(os.getcwd())
-sys.path.append(os.path.join(os.getcwd(), 'test'))
-
-from tinygrad.tensor import Tensor, Function, register
-from extra.utils import get_parameters
-import tinygrad.nn.optim as optim
-from test_mnist import X_train
-from torchvision.utils import make_grid, save_image
 import torch
-GPU = os.getenv("GPU") is not None
+from torchvision.utils import make_grid, save_image
+from tinygrad.tensor import Tensor
+from tinygrad.helpers import getenv
+from tinygrad.nn import optim
+from datasets import fetch_mnist
+GPU = getenv("GPU")
+
 class LinearGen:
   def __init__(self):
-    lv = 128
     self.l1 = Tensor.uniform(128, 256)
     self.l2 = Tensor.uniform(256, 512)
     self.l3 = Tensor.uniform(512, 1024)
@@ -30,7 +27,6 @@ class LinearGen:
 
 class LinearDisc:
   def __init__(self):
-    in_sh = 784
     self.l1 = Tensor.uniform(784, 1024)
     self.l2 = Tensor.uniform(1024, 512)
     self.l3 = Tensor.uniform(512, 256)
@@ -55,12 +51,13 @@ if __name__ == "__main__":
   batch_size = 512
   k = 1
   epochs = 300
-  generator_params = get_parameters(generator)
-  discriminator_params = get_parameters(discriminator)
+  generator_params = optim.get_parameters(generator)
+  discriminator_params = optim.get_parameters(discriminator)
   gen_loss = []
   disc_loss = []
   output_folder = "outputs"
   os.makedirs(output_folder, exist_ok=True)
+  X_train = fetch_mnist()[0]
   train_data_size = len(X_train)
   ds_noise = Tensor(np.random.randn(64,128).astype(np.float32), requires_grad=False)
   n_steps = int(train_data_size/batch_size)
@@ -122,7 +119,7 @@ if __name__ == "__main__":
     loss_g = 0.0
     loss_d = 0.0
     print(f"Epoch {epoch} of {epochs}")
-    for i in tqdm(range(n_steps)):
+    for _ in tqdm(range(n_steps)):
       image = generator_batch()
       for step in range(k): # Try with k = 5 or 7.
         noise = Tensor(np.random.randn(batch_size,128))
@@ -141,5 +138,4 @@ if __name__ == "__main__":
     epoch_loss_g = loss_g / n_steps
     epoch_loss_d = loss_d / n_steps
     print(f"EPOCH: Generator loss: {epoch_loss_g}, Discriminator loss: {epoch_loss_d}")
-  else:
-    print("Training Completed!")
+  print("Training Completed!")
